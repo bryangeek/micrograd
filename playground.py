@@ -52,7 +52,10 @@ class Value:
         # Do operation and set children.
         out = Value(self.data + other.data, (self, other), '+')
         def _backfunc():
-            """Backwards for add: accumulate the gradient."""
+            """dy/dx = 1.0 for addition operation.
+            NOTE: For all _backfunc() we multiply by the out.grad for the chain rule.
+            NOTE: For all _backfunc() we += the gradient in case a value is used more than once.
+            """
             self.grad  += 1.0 * out.grad
             other.grad += 1.0 * out.grad
         out._backward = _backfunc
@@ -73,7 +76,11 @@ class Value:
         # Do operation and set children.
         out =  Value(self.data * other.data, (self, other), '*')
         def _backfunc():
-            """Backwards for multiplication: accumulate the gradient times the current value."""
+            """
+            out = self*other and need to find dOut/dSelf and dOut/dOther
+            dOut/dSelf = other
+            dOut/dOther = self
+            """
             self.grad  += other.data * out.grad
             other.grad += self.data  * out.grad
         out._backward = _backfunc
@@ -86,7 +93,10 @@ class Value:
         assert isinstance(exponent, (int, float)), "Only support int/float"
         out = Value(self.data**exponent, (self, ), f'**{exponent}')
         def _backfunc():
-            """Backwards for powers: accumulate exponent * 1/value^(exponent) * gradient."""
+            """
+            y = x^n
+            dy/dx = n * x^(n-1) from wikipedia.
+            """
             self.grad += exponent * (self.data**(exponent-1)) * out.grad
         out._backward = _backfunc
         return out
@@ -98,7 +108,10 @@ class Value:
         x = self.data
         out = Value(math.exp(x), (self, ), 'exp')
         def _backfunc():
-            """Backwards for exp: just the value times the gradient."""
+            """
+            y = e^x
+            dy/dx = x
+            """
             self.grad = out.data * out.grad
         out._backward = _backfunc
         return out
@@ -108,12 +121,17 @@ class Value:
         t = (math.exp(2*x) - 1)/(math.exp(2*x) + 1)
         out = Value(t, (self, ), 'tanh')
         def _backfunc():
-            """Backwards for tanh: (1-tanh(x)^2) * gradient"""
+            """
+            y = tanh(x)
+            dy/dx = 1 - tanh(x)^2 from wikipedia
+            """
             self.grad += (1 - t**2) * out.grad
         out._backward = _backfunc
         return out
 
     def backward(self):
+        """Run a full back propagation over all inputs computing gradients at each step.
+        and storing that gradiant for every Value."""
         topo = []
         visited = set()
         def build_topo(v):
@@ -203,8 +221,11 @@ print('w1', w1.grad.item())
 # Build a neuron class like torch
 import random
 class Neuron():
+    """Simple neuron class.  Single bias term, single weight for each input."""
     def __init__(self, numdim, nonlin=True):
+        # Initialize the proper number of weights to random numbers.
         self.w = [Value(random.uniform(-1,1)) for _ in range(numdim)]
+        # Assume starting with no bias.
         self.b = Value(0)
         self.nonlin = nonlin
 
@@ -212,7 +233,8 @@ class Neuron():
         """Take an input x, and calculate an output and return it."""
         # Multiply each input by the corrisponding weight, then add b.
         act = sum((wi*xi for wi,xi in zip(self.w, x)), self.b)
-        out = act.tanh()  # Apply nonlinearity.
+        if self.nonlin:
+            out = act.tanh()  # Apply nonlinearity.
         return out
 
     def parameters(self):
@@ -220,6 +242,7 @@ class Neuron():
 
 # A layer is a collection of neurons.
 class Layer:
+    """Collection of neurons, one for each desired output."""
     def __init__(self, numin, numout):
         self.neurons = [Neuron(numin) for _ in range(numout)]
 
@@ -233,12 +256,13 @@ class Layer:
 
 # A multi-layer perceptron has several layers.
 class MLP:
-    def __init__(self, numin, numouts):
+    def __init__(self, numin, layer_neuron_counts):
         # To make iterating easier, make one list.  The number of inputs
         # to the next layer is the same as the number of outputs of the
         # previous layer.
-        size = [numin] + numouts
-        self.layers = [Layer(size[i], size[i+1]) for i in range(len(numouts))]
+        size = [numin] + layer_neuron_counts
+        num_layers = len(layer_neuron_counts)
+        self.layers = [Layer(size[i], size[i+1]) for i in range(num_layers)]
 
     def __call__(self, x):
         for layer in self.layers:
@@ -255,6 +279,7 @@ layer_neuron_counts = [4, 4, 1]
 x = [2.0, 3.0, -1]  # 3 dimensional input.
 mlp = MLP(3, layer_neuron_counts)
 y = mlp(x)
+print("Untrained model output: (expect 1.0)")
 print(x, y)
 print("num params: ", len(mlp.parameters()))
 
@@ -269,7 +294,7 @@ xs = [
 ys = [1.0, -1.0, -1.0, 1.0]  # Desired targets.
 
 # Build a training loop.
-for k in range(100):
+for k in range(200):
     # Forward pass.
     ypred = [mlp(x) for x in xs]
     loss = sum((yout - ygt)**2 for ygt, yout in zip(ys, ypred))
@@ -289,6 +314,6 @@ for k in range(100):
 # Forward pass and check.
 ypred = [mlp(x) for x in xs]
 loss = sum((yout - ygt)**2 for ygt, yout in zip(ys, ypred))
-print(loss)
+print("Loss: ", loss.data)
 
 print(ypred)
